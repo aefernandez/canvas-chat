@@ -561,67 +561,17 @@ def test_extract_provider_openrouter_models():
     assert extract_provider("openrouter/openai/gpt-4o") == "openrouter"
 
 
-def test_default_models_no_anthropic_prefix():
-    """Test MODEL_REGISTRY uses LiteLLM-compatible model IDs without provider prefix.
+def test_anthropic_model_ids_route_to_anthropic_without_prefix():
+    """Anthropic model IDs are ``anthropic/``-prefixed and LiteLLM strips the prefix.
 
-    This is a fix for issue #242 - LiteLLM expects model IDs WITHOUT the provider
-    prefix (e.g., 'claude-sonnet-4-20250514' not 'anthropic/claude-sonnet-4-20250514')
-    when making direct API calls (not via proxy).
-    """
-    from canvas_chat.app import MODEL_REGISTRY
-
-    anthropic_models = [m for m in MODEL_REGISTRY if m.get("provider") == "Anthropic"]
-
-    assert len(anthropic_models) > 0, "Should have Anthropic models defined"
-
-    for model in anthropic_models:
-        model_id = model.get("id", "")
-        assert not model_id.startswith("anthropic/"), (
-            f"Model ID '{model_id}' should NOT have 'anthropic/' prefix"
-        )
-
-
-def test_anthropic_models_resolvable_by_litellm():
-    """Test that Anthropic model IDs can be resolved by LiteLLM.
-
-    This verifies the fix for issue #242 - using 'anthropic/' prefix causes
-    NotFoundError from LiteLLM. Without the prefix, LiteLLM can resolve the model.
-
-    Note: Some older model versions (e.g., 20241022) may not be in LiteLLM's
-    model mapping. This test checks models that are currently supported.
+    Issue #242 reported a NotFoundError for ``anthropic/claude-3-5-haiku-20241022``.
+    LiteLLM routes ``anthropic/<id>`` to Anthropic and sends the bare ``<id>``,
+    so the prefix itself is safe; it also lets LiteLLM route models newer than
+    its built-in model map, which bare IDs cannot do.
     """
     import litellm
 
-    from canvas_chat.app import MODEL_REGISTRY
-
-    anthropic_models = [m for m in MODEL_REGISTRY if m.get("provider") == "Anthropic"]
-    assert len(anthropic_models) > 0
-
-    # Track which models pass/fail
-    resolved = []
-    unresolved = []
-
-    for model in anthropic_models:
-        model_id = model.get("id", "")
-        try:
-            model_info = litellm.get_model_info(model_id)
-            if model_info and model_info.get("litellm_provider") == "anthropic":
-                resolved.append(model_id)
-            else:
-                unresolved.append((model_id, "not recognized as anthropic"))
-        except Exception as e:
-            unresolved.append((model_id, str(e)[:50]))
-
-    # We should have at least some models that resolve correctly
-    assert len(resolved) > 0, (
-        f"No Anthropic models could be resolved by LiteLLM. Unresolved: {unresolved}"
-    )
-
-    # Document any unresolved models (warning, not failure)
-    if unresolved:
-        import warnings
-
-        warnings.warn(
-            f"Some Anthropic models not in LiteLLM mapping: {unresolved}",
-            stacklevel=2,
-        )
+    for model_id in ["anthropic/claude-sonnet-4-5-20250929", "anthropic/claude-x-99"]:
+        model, provider, *_ = litellm.get_llm_provider(model_id)
+        assert provider == "anthropic"
+        assert model == model_id.removeprefix("anthropic/")

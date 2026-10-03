@@ -387,7 +387,12 @@ class App {
             }
 
             // Restore last selected model (if still available)
-            const savedModel = storage.getCurrentModel();
+            let savedModel = storage.getCurrentModel();
+            // Anthropic models used to have unprefixed IDs (e.g. "claude-sonnet-4-5-20250929")
+            if (savedModel?.startsWith('claude-') && allModels.find((m) => m.id === `anthropic/${savedModel}`)) {
+                savedModel = `anthropic/${savedModel}`;
+                storage.setCurrentModel(savedModel);
+            }
             if (savedModel && allModels.find((m) => m.id === savedModel)) {
                 this.modelPicker.value = savedModel;
             }

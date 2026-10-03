@@ -681,55 +681,6 @@ MODEL_REGISTRY: list[dict] = [
         "provider": "OpenAI",
         "context_window": 16385,
     },
-    # Anthropic
-    {
-        "id": "claude-sonnet-4-5-20250929",
-        "name": "Claude Sonnet 4.5",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-opus-4-5-20251101",
-        "name": "Claude Opus 4.5",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-opus-4-20250514",
-        "name": "Claude Opus 4",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-7-sonnet-20250219",
-        "name": "Claude 3.7 Sonnet",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-5-sonnet-20241022",
-        "name": "Claude 3.5 Sonnet",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-5-haiku-20241022",
-        "name": "Claude 3.5 Haiku",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-opus-20240229",
-        "name": "Claude 3 Opus",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
     # Google
     {
         "id": "gemini/gemini-1.5-pro",
@@ -1117,7 +1068,9 @@ PROVIDER_ENDPOINTS = {
     "openai": "https://api.openai.com/v1/models",
     "groq": "https://api.groq.com/openai/v1/models",
     "github": "https://models.inference.ai.azure.com/models",
+    "anthropic": "https://api.anthropic.com/v1/models",
 }
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 # Context windows for known models (used as fallback)
 KNOWN_CONTEXT_WINDOWS = {
@@ -1126,10 +1079,7 @@ KNOWN_CONTEXT_WINDOWS = {
     "gpt-4-turbo": 128000,
     "gpt-4": 8192,
     "gpt-3.5-turbo": 16385,
-    "claude-3": 200000,
-    "claude-3.5": 200000,
-    "claude-sonnet-4": 200000,
-    "claude-opus-4": 200000,
+    "claude": 200000,
     "gemini-1.5": 2000000,
     "gemini-2": 1000000,
     "llama": 128000,
@@ -1320,65 +1270,60 @@ async def fetch_google_models(api_key: str) -> list[dict]:
     return []
 
 
-# Anthropic doesn't have a models list API, so we use a static list
-ANTHROPIC_MODELS = [
-    {
-        "id": "claude-sonnet-4-5-20250929",
-        "name": "Claude Sonnet 4.5",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-opus-4-5-20251101",
-        "name": "Claude Opus 4.5",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-opus-4-20250514",
-        "name": "Claude Opus 4",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-7-sonnet-20250219",
-        "name": "Claude 3.7 Sonnet",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-5-sonnet-20241022",
-        "name": "Claude 3.5 Sonnet",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-5-haiku-20241022",
-        "name": "Claude 3.5 Haiku",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-    {
-        "id": "claude-3-opus-20240229",
-        "name": "Claude 3 Opus",
-        "provider": "Anthropic",
-        "context_window": 200000,
-    },
-]
-
-
 async def fetch_anthropic_models(api_key: str) -> list[dict]:
-    """Return static Anthropic models (no list API available)."""
-    # Verify the API key is valid by checking format
-    if api_key and api_key.startswith("sk-ant-"):
-        return ANTHROPIC_MODELS
-    return []
+    """Fetch available models from Anthropic, newest first.
+
+    Raises:
+        HTTPException: 401 if the API key is rejected, 502 if Anthropic
+            cannot be reached or returns an error.
+    """
+    raw_models: list[dict] = []
+    params: dict[str, str | int] = {"limit": 1000}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            while True:
+                response = await client.get(
+                    PROVIDER_ENDPOINTS["anthropic"],
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": ANTHROPIC_API_VERSION,
+                    },
+                    params=params,
+                )
+                if response.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=401, detail="Invalid Anthropic API key"
+                    )
+                if response.status_code != 200:
+                    logger.warning(
+                        f"Anthropic models request failed: {response.status_code}"
+                    )
+                    raise HTTPException(
+                        status_code=502, detail="Failed to fetch Anthropic models"
+                    )
+                data = response.json()
+                raw_models.extend(data.get("data", []))
+                if not data.get("has_more") or not data.get("last_id"):
+                    break
+                params["after_id"] = data["last_id"]
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        logger.warning(f"Failed to fetch Anthropic models: {e}")
+        raise HTTPException(
+            status_code=502, detail="Failed to fetch Anthropic models"
+        ) from e
+
+    # ISO 8601 timestamps sort chronologically as strings
+    raw_models.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+    return [
+        {
+            "id": f"anthropic/{m['id']}",
+            "name": m.get("display_name") or m["id"],
+            "provider": "Anthropic",
+            "context_window": m.get("max_input_tokens") or get_context_window(m["id"]),
+        }
+        for m in raw_models
+        if m.get("id")
+    ]
 
 
 # --- Routes ---
