@@ -543,18 +543,6 @@ def test_extract_provider_without_prefix():
     assert extract_provider("gemini-1.5-pro") == "openai"
 
 
-def test_extract_provider_anthropic_models_without_prefix():
-    """Test that LiteLLM expects Anthropic models WITHOUT the 'anthropic/' prefix.
-
-    This is a known issue (#242) - using 'anthropic/claude-xxx' model IDs with
-    LiteLLM direct SDK calls causes NotFoundError. LiteLLM expects model IDs
-    without the provider prefix for direct API calls (not via proxy).
-    """
-    model_without_prefix = "claude-sonnet-4-20250514"
-    provider = extract_provider(model_without_prefix)
-    assert provider == "openai"  # Defaults to openai since no prefix
-
-
 def test_extract_provider_openrouter_models():
     """Test that extract_provider handles OpenRouter models correctly."""
     assert extract_provider("openrouter/anthropic/claude-3.5-sonnet") == "openrouter"

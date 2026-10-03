@@ -1290,9 +1290,14 @@ async def fetch_anthropic_models(api_key: str) -> list[dict]:
                     },
                     params=params,
                 )
-                if response.status_code in (401, 403):
+                if response.status_code == 401:
                     raise HTTPException(
                         status_code=401, detail="Invalid Anthropic API key"
+                    )
+                if response.status_code == 403:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Anthropic API key lacks permission to list models",
                     )
                 if response.status_code != 200:
                     logger.warning(
@@ -1306,14 +1311,14 @@ async def fetch_anthropic_models(api_key: str) -> list[dict]:
                 if not data.get("has_more") or not data.get("last_id"):
                     break
                 params["after_id"] = data["last_id"]
-    except (httpx.RequestError, httpx.TimeoutException) as e:
+    except (httpx.RequestError, ValueError) as e:
         logger.warning(f"Failed to fetch Anthropic models: {e}")
         raise HTTPException(
             status_code=502, detail="Failed to fetch Anthropic models"
         ) from e
 
     # ISO 8601 timestamps sort chronologically as strings
-    raw_models.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+    raw_models.sort(key=lambda m: m.get("created_at") or "", reverse=True)
     return [
         {
             "id": f"anthropic/{m['id']}",

@@ -156,3 +156,66 @@ def test_provider_models_anthropic_unreachable(monkeypatch):
     )
 
     assert response.status_code == 502
+
+
+def _post_anthropic():
+    return TestClient(app).post(
+        "/api/provider-models",
+        json={"provider": "anthropic", "api_key": "sk-ant-test"},
+    )
+
+
+def test_provider_models_anthropic_forbidden(monkeypatch):
+    """A key without permission returns 403, distinct from an invalid key."""
+    _mock_anthropic(monkeypatch, lambda request: httpx.Response(403, json={}))
+
+    assert _post_anthropic().status_code == 403
+
+
+def test_provider_models_anthropic_server_error(monkeypatch):
+    """Non-auth errors from Anthropic surface as 502."""
+    _mock_anthropic(monkeypatch, lambda request: httpx.Response(529, json={}))
+
+    assert _post_anthropic().status_code == 502
+
+
+def test_provider_models_anthropic_malformed_response(monkeypatch):
+    """A non-JSON 200 response surfaces as 502 rather than a server error."""
+    _mock_anthropic(monkeypatch, lambda request: httpx.Response(200, text="<html>"))
+
+    assert _post_anthropic().status_code == 502
+
+
+def test_provider_models_anthropic_has_more_without_last_id(monkeypatch):
+    """Pagination stops if has_more is set but no cursor is given."""
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        model = _anthropic_model("claude-x", "2026-01-01T00:00:00Z")
+        return httpx.Response(200, json={"data": [model], "has_more": True})
+
+    _mock_anthropic(monkeypatch, handler)
+
+    assert _post_anthropic().status_code == 200
+    assert len(requests) == 1
+
+
+def test_provider_models_anthropic_null_created_at(monkeypatch):
+    """Models with a null created_at still sort without error."""
+    models = [
+        _anthropic_model("claude-a", None),
+        _anthropic_model("claude-b", "2026-01-01T00:00:00Z"),
+    ]
+    _mock_anthropic(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"data": models, "has_more": False}),
+    )
+
+    response = _post_anthropic()
+
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()] == [
+        "anthropic/claude-b",
+        "anthropic/claude-a",
+    ]
