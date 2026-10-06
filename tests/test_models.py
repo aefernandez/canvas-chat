@@ -543,85 +543,105 @@ def test_extract_provider_without_prefix():
     assert extract_provider("gemini-1.5-pro") == "openai"
 
 
-def test_extract_provider_anthropic_models_without_prefix():
-    """Test that LiteLLM expects Anthropic models WITHOUT the 'anthropic/' prefix.
-
-    This is a known issue (#242) - using 'anthropic/claude-xxx' model IDs with
-    LiteLLM direct SDK calls causes NotFoundError. LiteLLM expects model IDs
-    without the provider prefix for direct API calls (not via proxy).
-    """
-    model_without_prefix = "claude-sonnet-4-20250514"
-    provider = extract_provider(model_without_prefix)
-    assert provider == "openai"  # Defaults to openai since no prefix
-
-
 def test_extract_provider_openrouter_models():
     """Test that extract_provider handles OpenRouter models correctly."""
     assert extract_provider("openrouter/anthropic/claude-3.5-sonnet") == "openrouter"
     assert extract_provider("openrouter/openai/gpt-4o") == "openrouter"
 
 
-def test_default_models_no_anthropic_prefix():
-    """Test MODEL_REGISTRY uses LiteLLM-compatible model IDs without provider prefix.
+def test_anthropic_model_ids_route_to_anthropic_without_prefix():
+    """Anthropic model IDs are ``anthropic/``-prefixed and LiteLLM strips the prefix.
 
-    This is a fix for issue #242 - LiteLLM expects model IDs WITHOUT the provider
-    prefix (e.g., 'claude-sonnet-4-20250514' not 'anthropic/claude-sonnet-4-20250514')
-    when making direct API calls (not via proxy).
-    """
-    from canvas_chat.app import MODEL_REGISTRY
-
-    anthropic_models = [m for m in MODEL_REGISTRY if m.get("provider") == "Anthropic"]
-
-    assert len(anthropic_models) > 0, "Should have Anthropic models defined"
-
-    for model in anthropic_models:
-        model_id = model.get("id", "")
-        assert not model_id.startswith("anthropic/"), (
-            f"Model ID '{model_id}' should NOT have 'anthropic/' prefix"
-        )
-
-
-def test_anthropic_models_resolvable_by_litellm():
-    """Test that Anthropic model IDs can be resolved by LiteLLM.
-
-    This verifies the fix for issue #242 - using 'anthropic/' prefix causes
-    NotFoundError from LiteLLM. Without the prefix, LiteLLM can resolve the model.
-
-    Note: Some older model versions (e.g., 20241022) may not be in LiteLLM's
-    model mapping. This test checks models that are currently supported.
+    Issue #242 reported a NotFoundError for ``anthropic/claude-3-5-haiku-20241022``.
+    LiteLLM routes ``anthropic/<id>`` to Anthropic and sends the bare ``<id>``,
+    so the prefix itself is safe; it also lets LiteLLM route models newer than
+    its built-in model map, which bare IDs cannot do.
     """
     import litellm
 
-    from canvas_chat.app import MODEL_REGISTRY
+    for model_id in ["anthropic/claude-sonnet-4-5-20250929", "anthropic/claude-x-99"]:
+        model, provider, *_ = litellm.get_llm_provider(model_id)
+        assert provider == "anthropic"
+        assert model == model_id.removeprefix("anthropic/")
 
-    anthropic_models = [m for m in MODEL_REGISTRY if m.get("provider") == "Anthropic"]
-    assert len(anthropic_models) > 0
 
-    # Track which models pass/fail
-    resolved = []
-    unresolved = []
+def test_sampling_temperature_drops_for_newer_claude_models():
+    """Claude models after 4.6 reject sampling params, so temperature is omitted."""
+    from canvas_chat.app import sampling_temperature
 
-    for model in anthropic_models:
-        model_id = model.get("id", "")
-        try:
-            model_info = litellm.get_model_info(model_id)
-            if model_info and model_info.get("litellm_provider") == "anthropic":
-                resolved.append(model_id)
-            else:
-                unresolved.append((model_id, "not recognized as anthropic"))
-        except Exception as e:
-            unresolved.append((model_id, str(e)[:50]))
+    for model in [
+        "anthropic/claude-sonnet-5-5",
+        "claude-opus-4-7",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-fable-5-1",
+        "openrouter/anthropic/claude-opus-5",
+        "anthropic/claude-x-99",
+    ]:
+        assert sampling_temperature(model, 0.7) is None, model
 
-    # We should have at least some models that resolve correctly
-    assert len(resolved) > 0, (
-        f"No Anthropic models could be resolved by LiteLLM. Unresolved: {unresolved}"
-    )
 
-    # Document any unresolved models (warning, not failure)
-    if unresolved:
-        import warnings
+def test_sampling_temperature_keeps_for_other_models():
+    """Older Claude models and non-Claude models keep their temperature."""
+    from canvas_chat.app import sampling_temperature
 
-        warnings.warn(
-            f"Some Anthropic models not in LiteLLM mapping: {unresolved}",
-            stacklevel=2,
-        )
+    for model in [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-20250514",
+        "anthropic/claude-opus-4-1-20250805",
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-3-5-haiku-20241022",
+        "openai/gpt-4o",
+        "ollama_chat/llama3",
+    ]:
+        assert sampling_temperature(model, 0.7) == 0.7, model
+
+
+def test_chat_omits_temperature_for_models_that_reject_it():
+    """/api/chat sends no temperature to Anthropic for Claude Sonnet 5.5."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from fastapi.testclient import TestClient
+
+    from canvas_chat.app import app
+
+    bodies = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["content-length"])
+            bodies.append(json.loads(self.rfile.read(length)))
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                b'{"type":"error","error":{"type":"invalid_request_error",'
+                b'"message":"stop"}}'
+            )
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = TestClient(app)
+        for model in ["anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-4-5"]:
+            client.post(
+                "/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.7,
+                    "api_key": "sk-ant-test",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                },
+            )
+    finally:
+        server.shutdown()
+
+    sent = {body["model"]: body for body in bodies}
+    assert "temperature" not in sent["claude-sonnet-5-5"]
+    assert sent["claude-sonnet-4-5"]["temperature"] == 0.7
