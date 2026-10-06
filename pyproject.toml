@@ -90,3 +90,11 @@ jsdoc = "npx -y jsdoc -c .jsdoc.json"
 
 [tool.pixi.dependencies]
 youtube-transcript-api = ">=1.2.3,<2"
+
+# llamabot (all releases through 0.19.16) caps litellm<1.82.7, a precaution
+# after the malicious 1.82.7/1.82.8 PyPI releases (2026-03-24). 1.104.0 is
+# needed for structured outputs on newer Claude models (Sonnet 5.5, Opus 5.5,
+# Fable 5.1); older litellm forces a tool call, which those models reject.
+# Pinned exactly so upgrades are deliberate. Applies to the pixi env only.
+[tool.pixi.pypi-options.dependency-overrides]
+litellm = "==1.104.0"
