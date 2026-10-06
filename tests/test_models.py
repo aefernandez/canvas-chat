@@ -563,3 +563,85 @@ def test_anthropic_model_ids_route_to_anthropic_without_prefix():
         model, provider, *_ = litellm.get_llm_provider(model_id)
         assert provider == "anthropic"
         assert model == model_id.removeprefix("anthropic/")
+
+
+def test_sampling_temperature_drops_for_newer_claude_models():
+    """Claude models after 4.6 reject sampling params, so temperature is omitted."""
+    from canvas_chat.app import sampling_temperature
+
+    for model in [
+        "anthropic/claude-sonnet-5-5",
+        "claude-opus-4-7",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-fable-5-1",
+        "openrouter/anthropic/claude-opus-5",
+        "anthropic/claude-x-99",
+    ]:
+        assert sampling_temperature(model, 0.7) is None, model
+
+
+def test_sampling_temperature_keeps_for_other_models():
+    """Older Claude models and non-Claude models keep their temperature."""
+    from canvas_chat.app import sampling_temperature
+
+    for model in [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-20250514",
+        "anthropic/claude-opus-4-1-20250805",
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-3-5-haiku-20241022",
+        "openai/gpt-4o",
+        "ollama_chat/llama3",
+    ]:
+        assert sampling_temperature(model, 0.7) == 0.7, model
+
+
+def test_chat_omits_temperature_for_models_that_reject_it():
+    """/api/chat sends no temperature to Anthropic for Claude Sonnet 5.5."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from fastapi.testclient import TestClient
+
+    from canvas_chat.app import app
+
+    bodies = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers["content-length"])
+            bodies.append(json.loads(self.rfile.read(length)))
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                b'{"type":"error","error":{"type":"invalid_request_error",'
+                b'"message":"stop"}}'
+            )
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = TestClient(app)
+        for model in ["anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-4-5"]:
+            client.post(
+                "/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.7,
+                    "api_key": "sk-ant-test",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                },
+            )
+    finally:
+        server.shutdown()
+
+    sent = {body["model"]: body for body in bodies}
+    assert "temperature" not in sent["claude-sonnet-5-5"]
+    assert sent["claude-sonnet-4-5"]["temperature"] == 0.7

@@ -217,6 +217,7 @@ Rules:
             from canvas_chat.app import (
                 copilot_extras_for_bot,
                 prepare_copilot_openai_request,
+                sampling_temperature,
             )
 
             if not litellm.supports_response_schema(
@@ -253,7 +254,7 @@ Rules:
                 system_prompt=system_prompt,
                 pydantic_model=SlideCaptionTitleOutput,
                 model_name=kwargs["model"],
-                temperature=0.2,
+                temperature=sampling_temperature(kwargs["model"], 0.2),
                 stream_target="none",
                 api_key=kwargs.get("api_key"),
                 **completion_kwargs,
@@ -323,6 +324,7 @@ Rules:
             from canvas_chat.app import (
                 copilot_extras_for_bot,
                 prepare_copilot_openai_request,
+                sampling_temperature,
             )
 
             if not litellm.supports_response_schema(
@@ -359,7 +361,7 @@ Rules:
                 system_prompt=system_prompt,
                 pydantic_model=DeckCaptionTitleOutput,
                 model_name=kwargs["model"],
-                temperature=0.2,
+                temperature=sampling_temperature(kwargs["model"], 0.2),
                 stream_target="none",
                 api_key=kwargs.get("api_key"),
                 **completion_kwargs,
@@ -446,6 +448,7 @@ Rules:
             from canvas_chat.app import (
                 copilot_extras_for_bot,
                 prepare_copilot_openai_request,
+                sampling_temperature,
             )
 
             if not litellm.supports_response_schema(
@@ -482,7 +485,7 @@ Rules:
                 system_prompt=system_prompt,
                 pydantic_model=NarrativeStyleSuggestionsOutput,
                 model_name=kwargs["model"],
-                temperature=0.3,
+                temperature=sampling_temperature(kwargs["model"], 0.3),
                 stream_target="none",
                 api_key=kwargs.get("api_key"),
                 **completion_kwargs,

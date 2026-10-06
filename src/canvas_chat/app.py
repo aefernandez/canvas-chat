@@ -21,6 +21,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sys
 import time
 import traceback
@@ -530,7 +531,7 @@ async def run_structured_summarize(
         system_prompt=full_system,
         pydantic_model=SummarizeOutput,
         model_name=prep["model"],
-        temperature=temperature,
+        temperature=sampling_temperature(prep["model"], temperature),
         stream_target="none",
         api_key=prep.get("api_key"),
         **completion_kwargs,
@@ -756,6 +757,24 @@ def get_api_key_for_provider(provider: str, request_key: str | None) -> str | No
     return None
 
 
+# Claude models that still accept sampling parameters: Claude 3.x and
+# Claude 4.0-4.6. Newer Claude models reject ``temperature`` with a 400.
+_CLAUDE_SAMPLING_MODEL_RE = re.compile(
+    r"^claude-(?:3|(?:opus|sonnet|haiku)-4(?:-[0-6])?(?:-\d{8})?$)"
+)
+
+
+def sampling_temperature(model: str, temperature: float | None) -> float | None:
+    """Return ``temperature``, or None for models that reject sampling params.
+
+    LiteLLM omits ``temperature`` from the request when it is None.
+    """
+    name = model.rsplit("/", 1)[-1]
+    if name.startswith("claude-") and not _CLAUDE_SAMPLING_MODEL_RE.match(name):
+        return None
+    return temperature
+
+
 def extract_provider(model: str) -> str:
     """Extract provider from model string."""
     if "/" in model:
@@ -880,7 +899,7 @@ async def _stream_text_deltas_async_simple_bot(
     bot = AsyncSimpleBot(
         system_prompt=system_prompt,
         model_name=prepared["model"],
-        temperature=temperature,
+        temperature=sampling_temperature(prepared["model"], temperature),
         stream_target="none",
         api_key=prepared.get("api_key"),
         **completion_kwargs,
@@ -1658,7 +1677,7 @@ async def chat(request: ChatRequest, http_request: Request):
     chat_bot = AsyncSimpleBot(
         system_prompt=system_prompt,
         model_name=kwargs["model"],
-        temperature=request.temperature,
+        temperature=sampling_temperature(kwargs["model"], request.temperature),
         stream_target="none",
         api_key=kwargs.get("api_key"),
         **completion_kwargs,
@@ -1993,8 +2012,9 @@ async def agent_completion(request: AgentCompletionRequest, http_request: Reques
             }
             if request.base_url:
                 kwargs["api_base"] = request.base_url
-            if request.temperature is not None:
-                kwargs["temperature"] = request.temperature
+            temperature = sampling_temperature(request.model, request.temperature)
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             if request.max_tokens:
                 kwargs["max_tokens"] = request.max_tokens
 
@@ -2134,7 +2154,9 @@ async def agent(request: AgentRequest, http_request: Request):
                 kwargs = {
                     "model": request.model,
                     "messages": current_messages,
-                    "temperature": request.temperature,
+                    "temperature": sampling_temperature(
+                        request.model, request.temperature
+                    ),
                     "tools": AGENT_TOOLS,
                     "api_key": api_key,
                 }
@@ -2924,7 +2946,7 @@ Examples:
             system_prompt=system_prompt,
             pydantic_model=RefinedQueryOutput,
             model_name=prep["model"],
-            temperature=0.3,
+            temperature=sampling_temperature(prep["model"], 0.3),
             stream_target="none",
             api_key=prep.get("api_key"),
             **completion_kwargs,
@@ -3216,7 +3238,7 @@ async def run_structured_string_list(
         system_prompt=system_prompt,
         pydantic_model=JsonStringListOutput,
         model_name=prep["model"],
-        temperature=temperature,
+        temperature=sampling_temperature(prep["model"], temperature),
         stream_target="none",
         api_key=prep.get("api_key"),
         **completion_kwargs,
@@ -3893,7 +3915,7 @@ Examples of good titles:
         title_bot = AsyncSimpleBot(
             system_prompt=system_prompt,
             model_name=prepared["model"],
-            temperature=0.7,
+            temperature=sampling_temperature(prepared["model"], 0.7),
             stream_target="none",
             api_key=prepared.get("api_key"),
             **completion_kwargs,
@@ -3969,7 +3991,7 @@ Examples:
         node_summary_bot = AsyncSimpleBot(
             system_prompt=system_prompt,
             model_name=prepared["model"],
-            temperature=0.5,
+            temperature=sampling_temperature(prepared["model"], 0.5),
             stream_target="none",
             api_key=prepared.get("api_key"),
             **completion_kwargs,

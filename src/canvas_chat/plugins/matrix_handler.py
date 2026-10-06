@@ -70,6 +70,7 @@ def register_endpoints(app):
             get_api_key_for_provider,
             inject_admin_credentials,
             prepare_copilot_openai_request,
+            sampling_temperature,
         )
 
         inject_admin_credentials(request)
@@ -134,7 +135,7 @@ Example 2 output: {{"rows": ["GitHub Copilot", "Tabnine"], "columns": ["Price", 
                 system_prompt=system_prompt,
                 pydantic_model=MatrixTwoListsOutput,
                 model_name=prep["model"],
-                temperature=0.3,
+                temperature=sampling_temperature(prep["model"], 0.3),
                 stream_target="none",
                 api_key=prep.get("api_key"),
                 **extras,
